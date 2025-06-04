@@ -2,329 +2,308 @@ library(shiny)
 library(shinyjs)
 library(shinyWidgets)
 library(shinythemes)
-library(magrittr)
+library(DT)
+library(plotly)
 library(dplyr)
+library(lubridate)
+library(qrcode)
 
-camera_urls <- c(
-  "http://192.168.249.112:8080/video",
-  "http://192.168.249.113:8080/video",
-  "http://192.168.249.114:8080/video",
-  "http://192.168.249.115:8080/video",
-  "http://192.168.249.116:8080/video"
-)
+orange_theme <- HTML(":root {
+  --primary-orange: #FF6B00;
+  --secondary-orange: #FFA726;
+  --light-orange: #FFF3E0;
+  --dark-orange: #CC5500;
+}
+body {
+  background-color: var(--light-orange);
+  font-family: 'Arial', sans-serif;
+}
+.floor-panel {
+  background: white;
+  border-radius: 10px;
+  padding: 15px;
+  margin: 10px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.slot-btn {
+  margin: 5px;
+  min-width: 90px;
+  transition: all 0.3s ease;
+}
+.cctv-frame {
+  border: 2px solid var(--primary-orange);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 10px 0;
+  height: 300px;
+}
+.progress-container {
+  display: flex;
+  align-items: center;
+  margin: 10px 0;
+}
+.progress-bar {
+  width: 300px !important;
+}
+")
 
-calculate_cost <- function(duration, type) {
-  rate <- ifelse(type == "motor", 2000, 5000)
-  ceiling(duration) * rate
+generate_ticket_id <- function() {
+  paste0(
+    "TIX-",
+    format(Sys.time(), "%Y%m%d%H%M%S"),
+    "-",
+    sprintf("%04d", sample(9999, 1))
+  )
 }
 
-data_file <- "parking_data.rds"
-
-ui <- fluidPage(
-  useShinyjs(),
-  titlePanel("Smart Parking System - Gedung Multilantai"),
-  theme = shinytheme("flatly"),
-  tags$head(
-    tags$style(HTML("
-      .parking-card {
-        border-radius: 15px; 
-        padding: 15px; 
-        margin-bottom: 15px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      }
-      .camera-feed {
-        border: 2px solid #ddd; 
-        border-radius: 10px; 
-        overflow: hidden;
-        margin-bottom: 15px;
-      }
-      .status-icon { font-size: 24px; 
-        vertical-align: middle; 
-        margin-right: 8px;
-      }
-      .progress-group {
-        margin: 10px 0;
-      }
-      .bttn-lg {
-        width: 100%;
-        margin: 5px 0;
-      }
-    "))
+ui <- navbarPage(
+  id = "navbar",  
+  title = div(img(src="https://i.postimg.cc/k4BWq0ms/KD-1-Ori.png", height="40px"),
+              "Smart Parking System"),
+  theme = shinytheme("sandstone"),
+  header = tags$head(tags$style(orange_theme)),
+  
+  tabPanel("Beranda",
+           useShinyjs(),
+           div(class = "container",
+               h2("Status Parkir Real-time", style = "color: var(--primary-orange);"),
+               uiOutput("capacity_overview"),
+               actionBttn("start_parking", "Mulai Parkir", style = "material-flat", color = "primary", size = "lg"),
+               hidden(
+                 div(id = "parking_interface",
+                     hr(),
+                     fluidRow(
+                       column(3,
+                              selectInput("lantai", "Pilih Lantai:", 1:5),
+                              radioGroupButtons("jenis_kendaraan", "Jenis Kendaraan:",
+                                                choices = c("Motor", "Mobil"),
+                                                status = "primary")
+                       ),
+                       column(9,
+                              uiOutput("slot_buttons"),
+                              verbatimTextOutput("ticket_info"),
+                              uiOutput("qr_display"),
+                              actionBttn("confirm_parking", "Konfirmasi Parkir", color = "success", disabled = TRUE)
+                       )
+                     )
+                 )
+               )
+           )
   ),
   
-  tabsetPanel(
-    tabPanel(icon("sign-in-alt"), "Masuk Parkir",
-             fluidRow(
-               column(8,
-                      h4("🎥 Monitoring Parkir Real-time", style = "color: #2c3e50;"),
-                      tabsetPanel(
-                        id = "camera_tabs",
-                        tabPanel("Lantai 1", tags$div(class = "camera-feed", tags$iframe(src = camera_urls[1], width = "100%", height = "400px"))),
-                        tabPanel("Lantai 2", tags$div(class = "camera-feed", tags$iframe(src = camera_urls[2], width = "100%", height = "400px"))),
-                        tabPanel("Lantai 3", tags$div(class = "camera-feed", tags$iframe(src = camera_urls[3], width = "100%", height = "400px"))),
-                        tabPanel("Lantai 4", tags$div(class = "camera-feed", tags$iframe(src = camera_urls[4], width = "100%", height = "400px"))),
-                        tabPanel("Lantai 5", tags$div(class = "camera-feed", tags$iframe(src = camera_urls[5], width = "100%", height = "400px")))
+  tabPanel("User",
+           tabsetPanel(
+             tabPanel("Transaksi",
+                      DTOutput("transaction_log"),
+                      plotlyOutput("revenue_chart")
+             ),
+             tabPanel("Pengaturan",
+                      numericInput("tarif_motor", "Tarif Motor (/jam):", 5000),
+                      numericInput("tarif_mobil", "Tarif Mobil (/jam):", 15000),
+                      actionBttn("save_rates", "Simpan Tarif", color = "primary")
+             ),
+             tabPanel("Kamera",
+                      fluidRow(
+                        column(6,
+                               div(class = "cctv-frame",
+                                   tags$iframe(src = "http://192.168.1.100:8080/video"))),
+                        column(6,
+                               div(class = "cctv-frame",
+                                   tags$iframe(src = "http://192.168.1.101:8080/video")))
                       )
-               ),
-               column(4,
-                      tags$div(class = "parking-card", style = "background-color: #f8f9fa;",
-                               h4("🚦 Status Kapasitas", style = "margin-top: 0;"),
-                               lapply(1:5, function(i) {
-                                 tagList(
-                                   tags$div(class = "parking-card", style = "background-color: #e9ecef;",
-                                            h5(paste("🏢 Lantai", i), style = "margin: 5px 0;"),
-                                            uiOutput(paste0("motor_bar_", i)),
-                                            uiOutput(paste0("car_bar_", i))
-                                   )
-                                 )
-                               })
-                      ),
-                      tags$div(class = "parking-card", style = "background-color: #f8f9fa; margin-top: 20px;",
-                               h4("🚘 Aksi Masuk Kendaraan", style = "margin-top: 0;"),
-                               actionBttn("motor_in", "Motor Masuk", style = "stretch", color = "primary", icon = icon("motorcycle"), size = "lg"),
-                               actionBttn("mobil_in", "Mobil Masuk", style = "stretch", color = "success", icon = icon("car"), size = "lg")
-                               # Tombol Simpan/Muat Data sudah dihapus dari sini
-                      )
-               )
              )
-    ),
-    
-    tabPanel(icon("sign-out-alt"), "Keluar Parkir",
-             fluidRow(
-               column(6, offset = 3,
-                      tags$div(class = "parking-card", style = "text-align: center;",
-                               h4("🚗 Proses Keluar Parkir", style = "margin-top: 0;"),
-                               actionBttn("motor_out", "Motor Keluar", style = "stretch", color = "royal", icon = icon("motorcycle"), size = "lg"),
-                               actionBttn("mobil_out", "Mobil Keluar", style = "stretch", color = "danger", icon = icon("car"), size = "lg"),
-                               hr(),
-                               h4("📝 Transaksi Terakhir"),
-                               verbatimTextOutput("last_action") %>% 
-                                 tagAppendAttributes(style = "white-space: pre-wrap; padding: 10px; background: #f8f9fa;")
-                      )
+           )
+  ),
+  
+  tabPanel("Keluar Parkir",
+           div(class = "container",
+               textInput("exit_ticket", "Masukkan Nomor Tiket:"),
+               actionBttn("process_exit", "Proses Keluar", color = "danger"),
+               hidden(
+                 div(id = "payment_panel",
+                     hr(),
+                     h4("Detail Pembayaran"),
+                     verbatimTextOutput("payment_details"),
+                     
+                     h4("Pilih Metode Pembayaran:"),
+                     radioGroupButtons("ewallet_option", "E-Wallet:", choices = c("QRIS M-Banking", "GoPay", "OVO", "ShopeePay"),
+                                       status = "warning"),
+                     uiOutput("ewallet_qr"),
+                     
+                     actionBttn("confirm_payment", "Selesai Pembayaran", color = "success")
+                 )
                )
-             )
-    ),
-    
-    tabPanel(icon("cog"), "Pengaturan",
-             fluidRow(
-               column(4, offset = 4,
-                      tags$div(class = "parking-card",
-                               h4("⚙️ Pengaturan Sistem", style = "margin-top: 0;"),
-                               numericInputIcon("max_motor", "Slot Motor/Lantai:", value = 5, min = 1, max = 50, icon = list(icon("motorcycle"))),
-                               numericInputIcon("max_mobil", "Slot Mobil/Lantai:", value = 5, min = 1, max = 50, icon = list(icon("car"))),
-                               hr(),
-                               actionBttn("apply_settings", "Simpan Pengaturan", style = "stretch", color = "warning"),
-                               hr(),
-                               h4("💾 Manajemen Data Parkir"),
-                               actionBttn("save_data", "Simpan Data Parkir", style = "stretch", color = "primary"),
-                               actionBttn("load_data", "Muat Data Parkir", style = "stretch", color = "primary")
-                      )
-               )
-             )
-    )
+           )
   )
 )
 
 server <- function(input, output, session) {
   rv <- reactiveValues(
-    max_motor_slots = 5,
-    max_car_slots = 5,
-    motor_slots = rep(5, 5),
-    car_slots = rep(5, 5),
-    motor_entry = list(),
-    car_entry = list(),
-    last_action_text = ""
+    slots = lapply(1:5, function(floor) {
+      list(motor = rep(FALSE, 10), mobil = rep(FALSE, 5))
+    }),
+    transactions = data.frame(
+      tiket = character(), lantai = numeric(), jenis = character(),
+      slot = numeric(), masuk = as.POSIXct(character()),
+      keluar = as.POSIXct(character()), durasi = numeric(), biaya = numeric(),
+      stringsAsFactors = FALSE
+    ),
+    tarif = list(motor = 5000, mobil = 15000),
+    current_ticket = NULL
   )
   
-  save_data <- function() {
-    motor_df <- if (length(rv$motor_entry) == 0) data.frame() else do.call(rbind, lapply(rv$motor_entry, as.data.frame))
-    car_df <- if (length(rv$car_entry) == 0) data.frame() else do.call(rbind, lapply(rv$car_entry, as.data.frame))
-    
-    df <- list(
-      max_motor_slots = rv$max_motor_slots,
-      max_car_slots = rv$max_car_slots,
-      motor_slots = rv$motor_slots,
-      car_slots = rv$car_slots,
-      motor_entry = motor_df,
-      car_entry = car_df
-    )
-    saveRDS(df, file = data_file)
-  }
-  
-  load_data <- function() {
-    if (file.exists(data_file)) {
-      df <- readRDS(data_file)
-      rv$max_motor_slots <- df$max_motor_slots
-      rv$max_car_slots <- df$max_car_slots
-      rv$motor_slots <- df$motor_slots
-      rv$car_slots <- df$car_slots
-      
-      if(nrow(df$motor_entry) > 0) {
-        rv$motor_entry <- apply(df$motor_entry, 1, function(x) list(waktu = as.POSIXct(x["waktu"]), lantai = as.integer(x["lantai"])))
-      } else {
-        rv$motor_entry <- list()
-      }
-      if(nrow(df$car_entry) > 0) {
-        rv$car_entry <- apply(df$car_entry, 1, function(x) list(waktu = as.POSIXct(x["waktu"]), lantai = as.integer(x["lantai"])))
-      } else {
-        rv$car_entry <- list()
-      }
-      
-      showModal(modalDialog("Data parkir berhasil dimuat.", easyClose = TRUE))
-    } else {
-      showModal(modalDialog("File data parkir tidak ditemukan.", easyClose = TRUE))
-    }
-  }
-  
-  capacity_bar <- function(pct, type, id) {
-    color <- dplyr::case_when(
-      pct < 70 ~ "success",
-      pct < 90 ~ "warning",
-      TRUE ~ "danger"
-    )
-    progressBar(id = id, value = pct, status = color, striped = TRUE, display_pct = TRUE)
-  }
-  
-  lapply(1:5, function(i) {
-    output[[paste0("motor_bar_", i)]] <- renderUI({
-      pct <- (1 - rv$motor_slots[i]/rv$max_motor_slots) * 100
-      title <- paste0("🛵 Motor (", rv$max_motor_slots - rv$motor_slots[i], "/", rv$max_motor_slots, ")")
-      tagList(tags$div(style = "margin-bottom: 15px;",
-                       tags$span(title, style = "font-weight: bold;"),
-                       capacity_bar(pct, "motor", id = paste0("motorbar", i))))
-    })
-    output[[paste0("car_bar_", i)]] <- renderUI({
-      pct <- (1 - rv$car_slots[i]/rv$max_car_slots) * 100
-      title <- paste0("🚗 Mobil (", rv$max_car_slots - rv$car_slots[i], "/", rv$max_car_slots, ")")
-      tagList(tags$div(style = "margin-bottom: 15px;",
-                       tags$span(title, style = "font-weight: bold;"),
-                       capacity_bar(pct, "car", id = paste0("carbar", i))))
+  observeEvent(input$start_parking, {
+    shinyjs::show("parking_interface")
+  })
+  output$capacity_overview <- renderUI({
+    lapply(1:5, function(floor) {
+      motor_available <- 10 - sum(rv$slots[[floor]]$motor)
+      mobil_available <- 5 - sum(rv$slots[[floor]]$mobil)
+      div(class = "floor-panel",
+          h4(paste("Lantai", floor)),
+          div(class = "progress-container",
+              span("Motor: "),
+              progressBar(paste0("motor_", floor), value = motor_available, total = 10,
+                          status = "success", display_pct = TRUE)),
+          div(class = "progress-container",
+              span("Mobil: "),
+              progressBar(paste0("mobil_", floor), value = mobil_available, total = 5,
+                          status = "primary", display_pct = TRUE))
+      )
     })
   })
   
-  observeEvent(input$apply_settings, {
-    rv$max_motor_slots <- input$max_motor
-    rv$max_car_slots <- input$max_mobil
-    rv$motor_slots <- rep(rv$max_motor_slots, 5)
-    rv$car_slots <- rep(rv$max_car_slots, 5)
-    rv$motor_entry <- list()
-    rv$car_entry <- list()
-    showModal(modalDialog("Pengaturan diperbarui. Semua slot di-reset ke kosong.", easyClose = TRUE))
+  output$slot_buttons <- renderUI({
+    req(input$lantai, input$jenis_kendaraan)
+    floor <- as.numeric(input$lantai)
+    jenis <- tolower(input$jenis_kendaraan)
+    max_slot <- ifelse(jenis == "motor", 10, 5)
+    fluidRow(
+      lapply(1:max_slot, function(i) {
+        status <- rv$slots[[floor]][[jenis]][i]
+        btn_class <- ifelse(status, "btn-danger",
+                            ifelse(jenis == "motor", "btn-success", "btn-primary"))
+        actionButton(paste0("slot_", floor, "_", i), label = paste("Slot", i),
+                     class = paste("btn", btn_class), disabled = status)
+      })
+    )
   })
   
-  observeEvent(input$motor_in, {
-    lantai <- which(rv$motor_slots > 0)[1]
-    if (is.na(lantai)) {
-      showModal(modalDialog("Parkir motor penuh!"))
-      return()
-    }
-    rv$motor_slots[lantai] <- rv$motor_slots[lantai] - 1
-    rv$motor_entry <- append(rv$motor_entry, list(list(waktu = Sys.time(), lantai = lantai)))
-    showModal(modalDialog(paste("Motor masuk di lantai", lantai), easyClose = TRUE))
+  observe({
+    lapply(1:5, function(floor) {
+      lapply(1:10, function(i) {
+        observeEvent(input[[paste0("slot_", floor, "_", i)]], {
+          req(input$jenis_kendaraan)
+          jenis <- tolower(input$jenis_kendaraan)
+          max_slot <- ifelse(jenis == "motor", 10, 5)
+          if (i <= max_slot) {
+            id <- generate_ticket_id()
+            rv$current_ticket <- list(
+              id = id, lantai = floor, jenis = jenis, slot = i, waktu_masuk = Sys.time()
+            )
+            output$ticket_info <- renderText({
+              paste("Tiket:", id, "\nLantai:", floor, "\nSlot:", i, "\nJenis:", input$jenis_kendaraan)
+            })
+            
+            shinyjs::enable("confirm_parking")
+          }
+        })
+      })
+    })
   })
   
-  observeEvent(input$mobil_in, {
-    lantai <- which(rv$car_slots > 0)[1]
-    if (is.na(lantai)) {
-      showModal(modalDialog("Parkir mobil penuh!"))
-      return()
-    }
-    rv$car_slots[lantai] <- rv$car_slots[lantai] - 1
-    rv$car_entry <- append(rv$car_entry, list(list(waktu = Sys.time(), lantai = lantai)))
-    showModal(modalDialog(paste("Mobil masuk di lantai", lantai), easyClose = TRUE))
+  observeEvent(input$confirm_parking, {
+    req(rv$current_ticket)
+    t <- rv$current_ticket
+    rv$slots[[t$lantai]][[t$jenis]][t$slot] <- TRUE
+    new_entry <- data.frame(
+      tiket = t$id, lantai = t$lantai, jenis = input$jenis_kendaraan,
+      slot = t$slot, masuk = t$waktu_masuk, keluar = as.POSIXct(NA),
+      durasi = NA, biaya = NA
+    )
+    rv$transactions <- rbind(rv$transactions, new_entry)
+    showNotification("Parkir berhasil dikonfirmasi!")
+    shinyjs::reset("parking_interface")
   })
   
-  show_payment_modal <- function(jenis, lantai, durasi, biaya) {
-    showModal(modalDialog(
-      title = paste("Pembayaran", toupper(jenis)),
-      tagList(
-        tags$p(style = "font-size: 16px;",
-               tags$b(icon("clock"), "Durasi Parkir:"), round(durasi, 2), "jam"),
-        tags$p(style = "font-size: 16px;",
-               tags$b(icon("coins"), "Total Biaya:"), tags$span(paste0("Rp", format(biaya, big.mark = ".", decimal.mark = ",")),
-                                                               style = "color: #27ae60; font-weight: bold;")),
-        radioGroupButtons("payment_method", "Metode Pembayaran:",
-                          choices = c("E-Wallet", "Tunai"), status = "primary"),
-        conditionalPanel(
-          condition = "input.payment_method == 'E-Wallet'",
-          tagList(
-            pickerInput("ewallet_option", "Pilih E-Wallet:",
-                        choices = c("QRIS M-Banking", "GoPay", "OVO", "ShopeePay")),
-            uiOutput("ewallet_qr")
-          )
-        )
-      ),
-      footer = tagList(
-        modalButton("Batal"),
-        actionBttn("confirm_payment", "Konfirmasi Pembayaran", color = "success")
-      ),
-      size = "m"
-    ))
-  }
-  
-  observeEvent(input$motor_out, {
-    if (length(rv$motor_entry) == 0) {
-      showModal(modalDialog("Tidak ada motor terdaftar."))
+  observeEvent(input$process_exit, {
+    req(input$exit_ticket)
+    record <- which(rv$transactions$tiket == input$exit_ticket)
+    if(length(record) == 0) {
+      showNotification("Tiket tidak valid!", type = "error")
       return()
     }
-    entry <- rv$motor_entry[[1]]
-    rv$motor_entry <- rv$motor_entry[-1]
-    durasi <- difftime(Sys.time(), entry$waktu, units = "hours")
-    biaya <- calculate_cost(durasi, "motor")
-    rv$motor_slots[entry$lantai] <- rv$motor_slots[entry$lantai] + 1
-    rv$last_action_text <- paste0("Motor keluar dari lantai ", entry$lantai, "\nDurasi: ", round(durasi,2), " jam\nBiaya: Rp", format(biaya, big.mark = ".", decimal.mark = ","))
-    show_payment_modal("motor", entry$lantai, durasi, biaya)
-  })
-  
-  observeEvent(input$mobil_out, {
-    if (length(rv$car_entry) == 0) {
-      showModal(modalDialog("Tidak ada mobil terdaftar."))
-      return()
-    }
-    entry <- rv$car_entry[[1]]
-    rv$car_entry <- rv$car_entry[-1]
-    durasi <- difftime(Sys.time(), entry$waktu, units = "hours")
-    biaya <- calculate_cost(durasi, "mobil")
-    rv$car_slots[entry$lantai] <- rv$car_slots[entry$lantai] + 1
-    rv$last_action_text <- paste0("Mobil keluar dari lantai ", entry$lantai, "\nDurasi: ", round(durasi,2), " jam\nBiaya: Rp", format(biaya, big.mark = ".", decimal.mark = ","))
-    show_payment_modal("mobil", entry$lantai, durasi, biaya)
+    entry_time <- rv$transactions$masuk[record]
+    exit_time <- Sys.time()
+    durasi <- ceiling(as.numeric(difftime(exit_time, entry_time, units = "hours")))
+    jenis <- tolower(rv$transactions$jenis[record])
+    biaya <- durasi * rv$tarif[[jenis]]
+    rv$transactions$keluar[record] <- exit_time
+    rv$transactions$durasi[record] <- durasi
+    rv$transactions$biaya[record] <- biaya
+    rv$slots[[rv$transactions$lantai[record]]][[jenis]][rv$transactions$slot[record]] <- FALSE
+    output$payment_details <- renderText({
+      paste("Tiket:", input$exit_ticket,
+            "\nDurasi:", durasi, "jam",
+            "\nBiaya: Rp", formatC(biaya, format = "d", big.mark = "."))
+    })
+    shinyjs::show("payment_panel")
   })
   
   output$ewallet_qr <- renderUI({
     req(input$ewallet_option)
     qr_url <- switch(input$ewallet_option,
                      "QRIS M-Banking" = "https://api.qrserver.com/v1/create-qr-code/?data=QRIS-123456&size=200x200",
-                     "GoPay" = "https://api.qrserver.com/v1/create-qr-code/?data=GOPAY-123456&size=200x200",
+                     "GoPay" = "https://i.postimg.cc/zXGVbdBx/Screenshot-2025-05-21-081134.png",
                      "OVO" = "https://api.qrserver.com/v1/create-qr-code/?data=OVO-123456&size=200x200",
                      "ShopeePay" = "https://api.qrserver.com/v1/create-qr-code/?data=SHOPEEPAY-555555&size=200x200"
     )
     tags$img(src = qr_url, width = "200px", height = "200px")
   })
   
+  output$revenue_chart <- renderPlotly({
+    req(nrow(rv$transactions) > 0)
+    df <- rv$transactions %>%
+      filter(!is.na(biaya)) %>%
+      mutate(tanggal = as.Date(masuk)) %>%
+      group_by(tanggal) %>%
+      summarise(pendapatan = sum(biaya))
+    plot_ly(df, x = ~tanggal, y = ~pendapatan, type = 'bar') %>%
+      layout(title = "Laporan Harian",
+             xaxis = list(title = "Tanggal"),
+             yaxis = list(title = "Pendapatan (Rp)"))
+  })
+  
+  output$transaction_log <- renderDT({
+    datatable(
+      rv$transactions,
+      options = list(scrollX = TRUE, pageLength = 5),
+      rownames = FALSE,
+      colnames = c('Tiket', 'Lantai', 'Jenis', 'Slot', 'Masuk', 'Keluar', 'Durasi', 'Biaya')
+    ) %>%
+      formatCurrency('biaya', 'Rp', digits = 0) %>%
+      formatDate(c('masuk', 'keluar'), method = 'toLocaleString')
+  })
+  
+  observeEvent(input$save_rates, {
+    rv$tarif$motor <- input$tarif_motor
+    rv$tarif$mobil <- input$tarif_mobil
+    showNotification("Tarif berhasil diperbarui!")
+  })
   observeEvent(input$confirm_payment, {
-    removeModal()
-    showModal(modalDialog("Pembayaran berhasil dilakukan. Terima kasih!", easyClose = TRUE))
+    # Tampilkan notifikasi selesai
+    showNotification("Pembayaran berhasil. Terima kasih telah menggunakan layanan kami!", type = "message")
+    
+    # Reset input tiket keluar dan pembayaran
+    updateTextInput(session, "exit_ticket", value = "")
+    shinyjs::hide("payment_panel")
+    
+    # Kembali ke tab "Beranda"
+    updateNavbarPage(session, inputId = "navbar", selected = "Beranda")
   })
   
-  output$last_action <- renderText({
-    rv$last_action_text
-  })
-  
-  observeEvent(input$save_data, {
-    save_data()
-    showModal(modalDialog("Data parkir berhasil disimpan.", easyClose = TRUE))
-  })
-  
-  observeEvent(input$load_data, {
-    load_data()
-  })
-  
-  # Saat mulai app, coba muat data kalau ada
-  isolate({
-    if (file.exists(data_file)) {
-      load_data()
-    }
-  })
 }
 
 shinyApp(ui, server)
+
+
